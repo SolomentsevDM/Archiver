@@ -1,0 +1,392 @@
+
+#include<unistd.h>
+#include<stdio.h>
+#include<stdlib.h>
+#include<dirent.h>
+#include<sys/types.h>
+#include<fcntl.h>
+#include<sys/stat.h>
+#include<time.h>
+#include<string.h>
+#include<libgen.h>
+#include<math.h>
+
+void ZipFile(char* path, char* ArchivePath);
+void ZipDir(DIR* dir);
+char *ArchiveName(char* file_name);
+void printdir(char* dir, int depth,int ArchiveFile);//Рекурсивная функция печати дерева директории в архив
+void PrintDirContent(char* dir,int ArchiveFile);//Рекурсивная функция печати данных файлов в архив
+void UnZip(char* ArchivePath, int Archive, char* OutputPath);
+int Pow(int x,int y);
+int GetFileSize(char *buf,int* SizeInd);
+char *GetFileName(char *buf,int* SizeInd,int *level);
+
+int main(int argc, char** argv)
+{
+	if(argc!=3)
+	{
+		printf("\nWrong number of command line arguments\n");
+		return 0;
+	}
+	DIR *dir;
+	dir=opendir(argv[1]);
+	if(dir!=NULL)
+	{
+		char *str = (char*)malloc(256);
+		char *ArchivePath = (char*)malloc(256);
+		memset(ArchivePath,'\0',256);
+		sprintf(str,"%s_Archive.arch",basename(argv[1]));//Формирование имени архива
+		sprintf(ArchivePath,"%s/%s",argv[2],str);
+		int Archive= open(ArchivePath,O_RDWR|O_CREAT|O_EXCL|O_TRUNC,S_IRUSR|S_IWUSR|S_IXUSR);
+		closedir(dir);
+		printdir(argv[1],0,Archive);
+		write(Archive,"\n",1);
+		PrintDirContent(argv[1],Archive);
+		close(Archive);
+		free(str);
+		free(ArchivePath);
+	}
+	else
+	{	
+		if(strlen(basename(argv[1]))<13)
+		{
+			ZipFile(argv[1],argv[2]);
+		}
+		else
+		{
+			int len=strlen(basename(argv[1]));
+			char *Name = (char*)malloc(13);
+			for(int i=0;i<13;i++)
+			{
+				Name[i]=basename(argv[1])[len-13+i];
+			}
+			if(strncmp(Name,"_Archive.arch",13)!=0)
+			{
+				ZipFile(argv[1],argv[2]);
+			}
+			else
+			{
+				int File=open(argv[1], O_RDWR);
+				if(File<0)
+				{
+					printf("\nError trying to open the file: %s",argv[1]);
+					return 0;
+				}
+				else
+				{
+					UnZip(argv[1],File,argv[2]);
+				}
+			}
+			free(Name);
+		}
+	}
+	return 0;
+}
+void ZipDir(DIR* dir)
+{
+			
+}
+
+void printdir(char* dir, int depth,int ArchiveFile)
+{
+	DIR* dp;
+	struct dirent *entry;
+	struct stat statbuf;
+	if((dp=opendir(dir))==NULL)
+	{
+		fprintf(stderr,"Cannot open directory: %s",dir);
+		return;
+	}
+	chdir(dir);
+	while((entry=readdir(dp))!=NULL)
+	{
+		lstat(entry->d_name,&statbuf);
+		if(S_ISDIR(statbuf.st_mode))
+		{
+			if(strcmp(".",entry->d_name)==0||strcmp("..",entry->d_name)==0)//Игнорирует . и ..
+				continue;
+			char *str=(char*)malloc(255);
+			sprintf(str,"%*s%s/\n",depth,"",entry->d_name);//Составление строки с отступами, соответствующими глубине
+			write(ArchiveFile,str,strlen(str));
+			free(str);
+			printdir(entry->d_name,depth+4,ArchiveFile);//Рекурсивный вызов с новм отступом
+		}
+		else 
+		{
+			struct stat FileStat;//Структура, содержащая информацию о файле
+			stat(entry->d_name, &FileStat);
+			long int time=FileStat.st_ctime;
+			char *str=(char*)malloc(255);
+			char info[64];
+			//Печать имени файла с соответстующим отступом
+			if(depth==0)
+			{
+				sprintf(str,"%*s%s%*s",depth,"",entry->d_name,abs(50-depth-strlen(entry->d_name))," ");
+			}
+			else
+			{
+				sprintf(str,"%*s%s%*s",depth," ",entry->d_name,abs(50-depth-strlen(entry->d_name))," ");
+			}
+			write(ArchiveFile,str,strlen(str));
+			sprintf(info,"%ld %s %s",FileStat.st_size,"byte",ctime(&time));//Печать метаинформации файла
+			write(ArchiveFile,info,strlen(info));
+			free(str);
+		}
+			
+	}
+	chdir("..");
+	closedir(dp);
+}
+
+void PrintDirContent(char* dir,int ArchiveFile)
+{
+	DIR* dp;
+	struct dirent *entry;
+	struct stat statbuf;
+	if((dp=opendir(dir))==NULL)
+	{
+		fprintf(stderr,"Cannot open directory: %s",dir);
+		return;
+	}
+	chdir(dir);
+	while((entry=readdir(dp))!=NULL)
+	{
+		lstat(entry->d_name,&statbuf);//Получение информации о директории
+		if(!S_ISDIR(statbuf.st_mode))
+		{
+			int File= open(entry->d_name,O_RDONLY,S_IRUSR|S_IWUSR|S_IXUSR);
+			if(File<0)
+			{
+				fprintf(stderr,"Cannot open file: %s",entry->d_name);
+			}
+			else
+			{
+				char buf[256];
+				char sym;
+				int count_char;
+				//Копирование всей информации файла в архив
+				while(read(File,&sym,1)==1)
+				{
+					write(ArchiveFile,&sym,1);
+				}
+			}
+			close(File);
+		}
+		else 
+		{
+			if(strcmp(".",entry->d_name)==0||strcmp("..",entry->d_name)==0)
+				continue;
+			PrintDirContent(entry->d_name,ArchiveFile);
+		}
+			
+	}
+	chdir("..");
+	closedir(dp);
+}
+void UnZip(char* ArchivePath, int Archive, char* OutputPath)
+{
+	char *Name=(char *)malloc(strlen(basename(ArchivePath))-4);
+	char *ArchiveOutPath=(char *)malloc(256);
+	memset(Name,'\0',strlen(basename(ArchivePath))-4);
+	memset(ArchiveOutPath,'\0',256);
+	//Создание имени директории архива
+	for(int i=0;i<strlen(basename(ArchivePath))-5;i++)
+	{
+		Name[i]=basename(ArchivePath)[i];
+	}
+	sprintf(ArchiveOutPath,"%s/%s",OutputPath,Name);
+	free(Name);
+	mkdir(ArchiveOutPath,O_CREAT|S_IRUSR|S_IWUSR);//Создание директории с этим именем
+	chdir(ArchiveOutPath);
+	free(ArchiveOutPath);
+	int c=0;
+	char sym;
+	while(c<2)
+	{
+		read(Archive,&sym,1);
+		if(sym=='\n')c++;
+		else {if(c>0)	c=0;}
+
+	}
+	int DATA=lseek(Archive,0,SEEK_CUR);//Позиция данных файлов
+	lseek(Archive,0,SEEK_SET);
+	int i=0;
+	int CurrentLevel=0;
+	char *buf=(char *)malloc(300);
+	memset(buf,'\0',300);
+	read(Archive,&buf[i],1);
+	//Считывание первой строки из архива
+	while(buf[i]!='\n')
+	{
+		i++;
+		read(Archive,&buf[i],1);
+	}
+	while(strlen(buf)!=1)
+	{
+	//Если последний символ строки это /, то это директория, иначе это файл
+	if(buf[i-1]=='/')
+		{
+			i=0;
+			int level=0;
+			//По количеству пробелов определяется на каком уровне находится текущая директория
+			while(buf[i++]==' ')
+			{
+				level++;
+			}
+			level/=4;
+			char *DirName=(char *)malloc(strlen(buf)-1-i);
+			int ind=0;
+			for(int j=i-1;j<strlen(buf)-2;j++)
+			{
+				DirName[ind]=buf[j];
+				ind++;
+			}
+			//Если уровень меньше текущего, то нужно подняться
+			if(level<CurrentLevel)
+			{
+				while(CurrentLevel!=level)
+				{
+					CurrentLevel--;
+					chdir("..");
+				}
+			}
+			mkdir(DirName,O_CREAT|S_IRUSR|S_IWUSR);//Содание очередной директории
+			chdir(DirName);
+			CurrentLevel+=1;
+			free(DirName);
+			memset(buf,'\0',strlen(buf)+1);
+			i=0;
+			read(Archive,&buf[i],1);
+			//Считывание следующей строки
+			while(buf[i]!='\n')
+			{
+				i++;
+				read(Archive,&buf[i],1);
+			}
+		}
+		else
+		{
+			int level=0;
+			int SizeInd=i-31;
+			int j=0;
+			int Filesize=GetFileSize(buf,&SizeInd);//Из строки выбирается размер файла
+			char *FileName=GetFileName(buf,&SizeInd,&level);//Получение имени файла
+			//Если уровень меньше текущего, то нужно подняться
+			while(CurrentLevel!=level)
+			{
+				CurrentLevel--;
+				chdir("..");
+			}
+			int TreePos=lseek(Archive,0,SEEK_CUR);//Запоминаем текущую позицию в дереве
+			int File=open(FileName,O_RDWR|O_CREAT|O_EXCL|O_TRUNC,S_IRUSR|S_IWUSR|S_IXUSR);//Создание нового файла
+			free(FileName);
+			//Считывание данных этого файла из архива по размеру файла
+			lseek(Archive,DATA,SEEK_SET);
+			char FileSym;
+			for(int i=0;i<Filesize;i++)
+			{
+				read(Archive,&FileSym,1);
+				write(File,&FileSym,1);
+			}
+			//Перемещаем метку с данными файлов
+			DATA=lseek(Archive,0,SEEK_CUR);
+			lseek(Archive,TreePos,SEEK_SET);//Возвращаемся к дереву
+			memset(buf,0,strlen(buf)+1);
+			i=0;
+			//Считывание новой строки
+			read(Archive,&buf[i],1);
+			while(buf[i]!='\n')
+			{
+				i++;
+				read(Archive,&buf[i],1);
+			}
+		}
+	}
+	free(buf);
+}
+
+int Pow(int x,int y)
+{
+	int result=1;
+	for(int i=0;i<y;i++)
+	{
+		result*=x;
+	}
+	return result;
+}
+int GetFileSize(char *buf,int* SizeInd)
+{
+	char *FileSize=(char *)malloc(10);
+	int j=0;
+	while(buf[*SizeInd]!=' ')
+	{
+		FileSize[j]=buf[*SizeInd];
+		(*SizeInd)--;
+		j++;
+	}
+	int Filesize=0;
+	while((j)!=0)
+	{
+		Filesize+=(FileSize[j-1]-'0')*Pow(10,j-1);
+		j--;
+	}
+	free(FileSize);
+	return Filesize;
+}
+char* GetFileName(char *buf,int* SizeInd,int *level)
+{
+	int LastSpaceInd=0;
+	while(buf[LastSpaceInd]==' ')
+	{
+		*level+=1;
+		LastSpaceInd++;
+	}
+	(*level)/=4;
+	char *FileName=(char *)malloc(*SizeInd-LastSpaceInd+2);
+	memset(FileName,'\0',*SizeInd-LastSpaceInd+2);
+	while(buf[(*SizeInd)--]==' '){ }
+	(*SizeInd)++;
+	for(int j=0;LastSpaceInd<=*SizeInd;LastSpaceInd++,j++)
+	{
+	FileName[j]=buf[LastSpaceInd];
+	}
+	return FileName;
+}
+
+void ZipFile(char* path, char* ArchivePath)
+{
+	int File=open(path,O_RDONLY,S_IRUSR|S_IWUSR|S_IXUSR);
+	if(File<0)
+	{
+		printf("\nError trying to open the file: %s",path);
+		return;
+	}
+	char Name[256];
+	memset(Name,'\0',256);
+	sprintf(Name,"%s_Archive.arch",basename(path));
+	char *Archive=(char*)malloc(256);
+	memset(Archive,'\0',256);
+	sprintf(Archive,"%s/%s",ArchivePath,Name);
+	int ArchiveFile=open(Archive,O_RDWR|O_CREAT|O_EXCL|O_TRUNC,S_IRUSR|S_IWUSR|S_IXUSR);
+	free(Archive);
+	struct stat FileStat;//Структура, содержащая информацию о файле
+	fstat(File, &FileStat);
+	long int time=FileStat.st_ctime;
+	char *str=(char*)malloc(255);
+	char info[64];
+	//Печать имени файла с соответстующим отступом
+	sprintf(str,"%s%*s",basename(path),abs(50-strlen(basename(path)))," ");
+	write(ArchiveFile,str,strlen(str));
+	sprintf(info,"%ld %s %s",FileStat.st_size,"byte",ctime(&time));//Печать метаинформации файла
+	write(ArchiveFile,info,strlen(info));
+	write(ArchiveFile,"\n",1);
+	char buf[256];
+	char sym;
+	int count_char;
+	//Копирование всей информации файла в архив
+	while(read(File,&sym,1)==1)
+	{
+		write(ArchiveFile,&sym,1);
+	}
+	free(str);
+}
